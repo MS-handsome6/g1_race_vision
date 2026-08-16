@@ -6,16 +6,23 @@ A closed-loop 100 m sprint stack for the **29-DoF Unitree G1**, integrating MuJo
 
 > The current results are validated in MuJoCo simulation. This repository does not claim a completed 100 m run on physical G1 hardware.
 
+The hardware path is straight-first with vision correction: the running policy maintains straight motion, while vision locks the two boundaries of the selected lane. Steering remains quiet inside the center corridor and applies bounded correction only after lateral or heading error crosses its threshold.
+
+The RealSense entry point subscribes to `/camera/camera/color/camera_info` and uses the D435i color calibration focal length and principal point for heading estimation. The `55.2°` vertical field of view shown in the [Unitree G1 depth-camera documentation](https://support.unitree.com/home/zh/G1_developer/depth_camera_instruction) is used only as a fallback when `CameraInfo` is unavailable.
+
 ![Two-boundary perception dashboard](g1_camera_dashboard_official_track.png)
 
 ## Highlights
 
 - Reuses the [`C1801SYQ/g1_running`](https://github.com/C1801SYQ/g1_running) 29-DoF TorchScript running policy while keeping perception and joint control separated.
 - Detects two real white lane boundaries using HSV segmentation, morphology, connected-component filtering, and line fitting.
+- Keeps edge-clipped real lane boundaries valid when both painted segments still share enough observed image rows.
+- Uses ROS 2 D435i `CameraInfo` (`fx / cx`) for calibrated visual heading, with a documented FOV fallback.
+- Replays three recent physical-track frames as regression fixtures for stable two-boundary lane lock.
 - Locks the selected lane using width, center, and temporal-continuity constraints to reject adjacent lanes.
 - Fuses visual lateral error with G1 IMU heading feedback for high-speed steering.
 - Adds an isolated **Skill 6** to `rl_sar`: one-key stand-up, lane lock, sprint, timed 100 m crossing, visually guided deceleration, and automatic return to Passive.
-- Includes watchdog behavior, fall detection, repeatable scene generation, launch scripts, and 22 unit tests.
+- Includes watchdog behavior, fall detection, repeatable scene generation, launch scripts, and 90 unit tests.
 
 ## Simulation Result
 
@@ -83,7 +90,7 @@ conda activate g1race
 python -m unittest discover -s tests -v
 ```
 
-The 22 tests cover lane-pair validation, adjacent-lane rejection, steering direction, acceleration limits, perception dropout, post-finish visual braking, and race-scene geometry.
+The 90 tests cover lane-pair validation, adjacent-lane rejection, edge-clipped physical lines, D435i intrinsics and ground projection, three physical-track frames, steering direction, acceleration limits, depth safety, perception dropout, post-finish visual braking, UDP watchdog behavior, and race-scene geometry.
 
 ## Sim-to-Real Status
 
