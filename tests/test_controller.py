@@ -123,6 +123,38 @@ class LaneFollowerControllerTest(unittest.TestCase):
 
         self.assertLess(max(abs(command.wz) for command in commands), 1e-9)
 
+    def test_persistent_camera_center_offset_is_corrected(self):
+        controller = LaneFollowerController(
+            LaneFollowerConfig(
+                max_forward_accel_mps2=20.0,
+                max_yaw_accel_rps2=20.0,
+            )
+        )
+        commands = []
+        for index in range(40):
+            commands.append(
+                controller.update(
+                    DetectionResult(
+                        valid=True,
+                        lateral_error=0.085,
+                        confidence=1.0,
+                    ),
+                    now=0.05 * index,
+                    heading_hold_error_rad=0.0,
+                )
+            )
+
+        self.assertLess(commands[-1].wz, 0.0)
+        first_correction = next(
+            index
+            for index, command in enumerate(commands)
+            if command.wz < 0.0
+        )
+        self.assertGreaterEqual(
+            0.05 * first_correction,
+            controller.config.center_alignment_confirm_s - 0.15,
+        )
+
     def test_lane_to_right_commands_right_turn(self):
         controller = LaneFollowerController()
         result = DetectionResult(

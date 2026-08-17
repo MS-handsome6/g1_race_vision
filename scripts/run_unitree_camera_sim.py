@@ -1143,9 +1143,6 @@ def main() -> None:
                             controller.set_visual_heading_reference(
                                 result.heading_error_rad
                             )
-                            lateral_reference = result.lateral_error
-                            detector.set_lateral_reference(lateral_reference)
-                            result.lateral_error = 0.0
                             vision_enabled = True
                             lane_lock_acquired.set()
                             if args.debug_snapshot is not None:
@@ -1160,7 +1157,9 @@ def main() -> None:
                                 saved_lock_debug = True
                             print(
                                 "[vision] final-height target lane locked; "
-                                f"lateral reference={lateral_reference:+.3f}; "
+                                "camera optical centre remains the lane "
+                                "target; initial centre error="
+                                f"{result.lateral_error:+.3f}; "
                                 "starting-block IMU heading reference="
                                 f"{race_timing['heading_yaw']:+.3f} rad; "
                                 "enabling bounded white-line correction",

@@ -82,7 +82,13 @@ class WhiteLaneDetectorTest(unittest.TestCase):
         self.assertEqual(len(frame_paths), 3)
 
         for frame_path in frame_paths:
-            bgr = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
+            # ``cv2.imread`` on Windows cannot reliably open non-ASCII paths.
+            # Decode bytes explicitly so this regression also runs from the
+            # Chinese-named internship workspace used for deployment.
+            bgr = cv2.imdecode(
+                np.fromfile(frame_path, dtype=np.uint8),
+                cv2.IMREAD_COLOR,
+            )
             self.assertIsNotNone(bgr, str(frame_path))
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             result = detector.detect(rgb)
@@ -140,6 +146,14 @@ class WhiteLaneDetectorTest(unittest.TestCase):
 
         self.assertTrue(calibrated.valid)
         self.assertTrue(image_centered.valid)
+        self.assertLess(abs(calibrated.lateral_error), 0.01)
+        self.assertGreater(image_centered.lateral_error, 0.15)
+        self.assertAlmostEqual(calibrated.camera_center_x_px, 380.0)
+        self.assertAlmostEqual(
+            calibrated.lane_center_x_px,
+            calibrated.camera_center_x_px,
+            delta=2.0,
+        )
         self.assertLess(abs(calibrated.heading_error_rad), 0.01)
         self.assertGreater(image_centered.heading_error_rad, 0.05)
 
@@ -287,18 +301,20 @@ class WhiteLaneDetectorTest(unittest.TestCase):
         self.assertFalse(adjacent.valid)
         self.assertEqual(adjacent.source, "none")
 
-    def test_lane_lock_calibrates_fixed_lateral_camera_offset(self):
+    def test_lane_lock_does_not_zero_a_real_camera_center_offset(self):
         detector = WhiteLaneDetector()
         shifted = synthetic_lane(shift_px=80)
-        before = detector.detect(shifted)
-        self.assertTrue(before.valid)
-        self.assertGreater(abs(before.lateral_error), 0.10)
+        first = detector.detect(shifted)
+        second = detector.detect(shifted)
 
-        detector.set_lateral_reference(before.lateral_error)
-        after = detector.detect(shifted)
-
-        self.assertTrue(after.valid)
-        self.assertLess(abs(after.lateral_error), 0.03)
+        self.assertTrue(first.valid)
+        self.assertTrue(second.valid)
+        self.assertGreater(abs(first.lateral_error), 0.10)
+        self.assertAlmostEqual(
+            second.lateral_error,
+            first.lateral_error,
+            delta=0.02,
+        )
 
     def test_confirmed_boundary_breach_cannot_relock_without_reset(self):
         detector = WhiteLaneDetector(

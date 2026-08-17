@@ -6,7 +6,7 @@ A closed-loop 100 m sprint stack for the **29-DoF Unitree G1**, integrating MuJo
 
 > The current results are validated in MuJoCo simulation. This repository does not claim a completed 100 m run on physical G1 hardware.
 
-The hardware path is straight-first with vision correction: the running policy maintains straight motion, while vision locks the two boundaries of the selected lane. Steering remains quiet inside the center corridor and applies bounded correction only after lateral or heading error crosses its threshold.
+The hardware path is straight-first with vision correction: the running policy maintains straight motion, while vision locks the two boundaries of the selected lane and uses the calibrated `CameraInfo.cx` optical centre as the sole lateral target. Lane lock no longer zeroes the robot's starting offset; large errors are corrected immediately, while a smaller one-sided offset must persist for 0.6 s so alternating gait sway does not trigger steering.
 
 The RealSense entry point subscribes to `/camera/camera/color/camera_info` and uses the D435i color calibration focal length and principal point for heading estimation. The `55.2°` vertical field of view shown in the [Unitree G1 depth-camera documentation](https://support.unitree.com/home/zh/G1_developer/depth_camera_instruction) is used only as a fallback when `CameraInfo` is unavailable.
 
@@ -18,6 +18,7 @@ The RealSense entry point subscribes to `/camera/camera/color/camera_info` and u
 - Detects two real white lane boundaries using HSV segmentation, morphology, connected-component filtering, and line fitting.
 - Keeps edge-clipped real lane boundaries valid when both painted segments still share enough observed image rows.
 - Uses ROS 2 D435i `CameraInfo` (`fx / cx`) for calibrated visual heading, with a documented FOV fallback.
+- Closes the loop between the midpoint of the two lane boundaries and calibrated camera `cx`, and draws both centres plus their error in the debug image.
 - Replays three recent physical-track frames as regression fixtures for stable two-boundary lane lock.
 - Locks the selected lane using width, center, and temporal-continuity constraints to reject adjacent lanes.
 - Fuses visual lateral error with G1 IMU heading feedback for high-speed steering.

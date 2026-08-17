@@ -260,7 +260,7 @@ class RealSenseLaneFollower(Node):
         self.latest_depth_time = 0.0
         self.camera_intrinsics: CameraIntrinsics | None = None
         self._last_detector_mode = "PREVIEW"
-        self._num7_references_calibrated = False
+        self._num7_heading_reference_calibrated = False
         self.latest_safety = self.depth_safety.evaluate(None, float("inf"))
         # The UDP listener runs on a background thread, while the detector,
         # controller and distance gate are owned by the ROS image callback.
@@ -451,11 +451,10 @@ class RealSenseLaneFollower(Node):
         )
         if depth is not None and depth.shape != rgb.shape[:2]:
             depth = None
-        intrinsics = (
-            self.camera_intrinsics
-            if depth is not None
-            else None
-        )
+        # RGB centring and heading always use CameraInfo. Depth freshness only
+        # controls physical-width validation; a dropped/stale depth frame must
+        # never silently move the lateral target back to width / 2.
+        intrinsics = self.camera_intrinsics
 
         result = self.detector.detect(rgb, depth, intrinsics)
         if self.mission == "walk0p5m":
@@ -463,13 +462,13 @@ class RealSenseLaneFollower(Node):
                 result.mode == "LOCKED"
                 and self._last_detector_mode != "LOCKED"
             ):
-                self.detector.set_lateral_reference(result.lateral_error)
                 self.controller.set_visual_heading_reference(
                     result.heading_error_rad
                 )
-                self._num7_references_calibrated = True
+                self._num7_heading_reference_calibrated = True
                 self.get_logger().warning(
-                    "Num7 initial lock completed; lane/heading references "
+                    "Num7 initial lock completed; camera optical centre "
+                    "remains the lane target and heading reference is "
                     "calibrated"
                 )
             self._last_detector_mode = result.mode

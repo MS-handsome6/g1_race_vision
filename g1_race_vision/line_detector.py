@@ -114,6 +114,13 @@ class DetectionResult:
     lock_confirm: int = 0
     lock_confirm_target: int = 0
     physical_lane_width_m: Optional[float] = None
+    # Pixel-space alignment diagnostics. ``camera_center_x_px`` is the
+    # calibrated optical principal point (CameraInfo.cx), not necessarily the
+    # geometric middle of the image. ``lane_center_x_px`` is evaluated on the
+    # same near-field row used by the lateral controller.
+    camera_center_x_px: float = 0.0
+    lane_center_x_px: Optional[float] = None
+    lateral_measurement_y_px: Optional[float] = None
     candidates: list = field(default_factory=list)
     candidate_reject_reasons: list = field(default_factory=list)
 
@@ -129,7 +136,6 @@ class WhiteLaneDetector:
         self._last_valid_lateral_error = 0.0
         self._boundary_breach_frames = 0
         self._lane_identity_lost = False
-        self._lateral_reference = 0.0
         self._num7_lifecycle_enabled = False
         self._num7_mission_active = False
         self._mission_state = "LEGACY"
@@ -150,15 +156,8 @@ class WhiteLaneDetector:
         self._last_valid_lateral_error = 0.0
         self._boundary_breach_frames = 0
         self._lane_identity_lost = False
-        self._lateral_reference = 0.0
         self._lock_confirm_count = 0
         self._lock_confirm_history.clear()
-
-    def set_lateral_reference(self, lateral_error: float) -> None:
-        """Make the locked start pose the zero-error centre of the lane."""
-
-        self._lateral_reference = float(lateral_error)
-        self._last_valid_lateral_error = 0.0
 
     def configure_num7_lifecycle(self, enabled: bool = True) -> None:
         """Enable the Num7 preview / initial-lock / locked state machine."""
@@ -208,6 +207,11 @@ class WhiteLaneDetector:
             intrinsics.width != width or intrinsics.height != height
         ):
             intrinsics = None
+        camera_center_x = (
+            float(intrinsics.cx)
+            if intrinsics is not None
+            else 0.5 * float(width)
+        )
 
         self._candidate_reject_reasons = []
 
@@ -305,17 +309,6 @@ class WhiteLaneDetector:
                     if intrinsics is not None
                     else None
                 ),
-            )
-            # A chest camera is not necessarily centred over the pelvis, and
-            # the running policy can hold a small steady torso translation.
-            # Calibrating once at lane lock removes that fixed image-space
-            # offset without changing which physical pair remains selected.
-            result.lateral_error = float(
-                np.clip(
-                    result.lateral_error - self._lateral_reference,
-                    -2.0,
-                    2.0,
-                )
             )
             result.candidates = candidates
             result.candidate_reject_reasons = reject_reasons
@@ -496,6 +489,7 @@ class WhiteLaneDetector:
                 lookahead_y=lookahead_y,
                 image_width=width,
                 image_height=height,
+                camera_center_x_px=camera_center_x,
                 value_threshold=value_threshold,
                 mask=mask,
             )
@@ -515,6 +509,7 @@ class WhiteLaneDetector:
                 lookahead_y=lookahead_y,
                 image_width=width,
                 image_height=height,
+                camera_center_x_px=camera_center_x,
                 value_threshold=value_threshold,
                 mask=mask,
             )
@@ -543,6 +538,7 @@ class WhiteLaneDetector:
             lookahead_y=lookahead_y,
             image_width=width,
             image_height=height,
+            camera_center_x_px=camera_center_x,
             value_threshold=value_threshold,
             mask=mask,
         )
@@ -594,6 +590,9 @@ class WhiteLaneDetector:
             lock_confirm=result.lock_confirm,
             lock_confirm_target=result.lock_confirm_target,
             physical_lane_width_m=result.physical_lane_width_m,
+            camera_center_x_px=result.camera_center_x_px,
+            lane_center_x_px=result.lane_center_x_px,
+            lateral_measurement_y_px=result.lateral_measurement_y_px,
             candidates=result.candidates,
             candidate_reject_reasons=result.candidate_reject_reasons,
         )
@@ -750,7 +749,11 @@ class WhiteLaneDetector:
         min_width = width * self.config.min_lane_width_ratio
         max_width = width * self.config.max_lane_width_ratio
         expected = width * self.config.expected_lane_width_ratio
-        image_center = 0.5 * width
+        image_center = (
+            float(intrinsics.cx)
+            if intrinsics is not None
+            else 0.5 * float(width)
+        )
 
         for index, first in enumerate(candidates):
             for second in candidates[index + 1 :]:
@@ -1303,7 +1306,12 @@ class WhiteLaneDetector:
         right_top = right.x_at(lookahead_y)
         center_bottom = 0.5 * (left_bottom + right_bottom)
         center_top = 0.5 * (left_top + right_top)
-        lateral_error = (center_bottom - 0.5 * width) / (0.5 * width)
+        optical_center_x = (
+            float(principal_x_px)
+            if principal_x_px is not None
+            else 0.5 * float(width)
+        )
+        lateral_error = (center_bottom - optical_center_x) / (0.5 * width)
         # The slope of the image-space lane center mixes lateral displacement
         # with yaw. The vanishing point of the two boundaries is independent of
         # lateral displacement on a straight track, so it is a much cleaner
@@ -1316,11 +1324,6 @@ class WhiteLaneDetector:
                 focal_px = (0.5 * height) / np.tan(
                     np.radians(0.5 * self.config.vertical_fov_degrees)
                 )
-            optical_center_x = (
-                float(principal_x_px)
-                if principal_x_px is not None
-                else 0.5 * width
-            )
             heading_error = np.arctan2(
                 vanishing_x - optical_center_x,
                 focal_px,
@@ -1342,6 +1345,9 @@ class WhiteLaneDetector:
             lookahead_y=lookahead_y,
             image_width=width,
             image_height=height,
+            camera_center_x_px=optical_center_x,
+            lane_center_x_px=float(center_bottom),
+            lateral_measurement_y_px=float(bottom_y),
             value_threshold=value_threshold,
             mask=mask,
         )
@@ -1465,12 +1471,57 @@ class WhiteLaneDetector:
                 3,
                 cv2.LINE_AA,
             )
+            camera_center_x = int(
+                round(
+                    result.camera_center_x_px
+                    if result.camera_center_x_px > 0.0
+                    else 0.5 * width
+                )
+            )
             cv2.line(
                 canvas,
-                (width // 2, height - 1),
-                (width // 2, result.roi_y),
+                (camera_center_x, height - 1),
+                (camera_center_x, result.roi_y),
                 (220, 80, 220),
-                1,
+                2,
+                cv2.LINE_AA,
+            )
+            measurement_y = int(
+                round(
+                    result.lateral_measurement_y_px
+                    if result.lateral_measurement_y_px is not None
+                    else height - 1
+                )
+            )
+            lane_center_x = int(
+                round(
+                    result.lane_center_x_px
+                    if result.lane_center_x_px is not None
+                    else center_bottom
+                )
+            )
+            cv2.line(
+                canvas,
+                (camera_center_x, measurement_y),
+                (lane_center_x, measurement_y),
+                (255, 255, 255),
+                3,
+                cv2.LINE_AA,
+            )
+            cv2.circle(
+                canvas,
+                (camera_center_x, measurement_y),
+                6,
+                (220, 80, 220),
+                -1,
+                cv2.LINE_AA,
+            )
+            cv2.circle(
+                canvas,
+                (lane_center_x, measurement_y),
+                6,
+                (255, 220, 20),
+                -1,
                 cv2.LINE_AA,
             )
 
@@ -1486,7 +1537,7 @@ class WhiteLaneDetector:
             f"{result.lock_confirm_target or '--'}"
         )
         errors = (
-            f"offset={result.lateral_error:+.3f} "
+            f"center_err={result.lateral_error:+.3f} "
             f"heading={np.degrees(result.heading_error_rad):+.2f}deg "
             f"phys_width={physical}"
         )

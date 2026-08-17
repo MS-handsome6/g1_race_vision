@@ -30,13 +30,14 @@ class LaneFollowerConfig:
     # correction mode only after leaving this corridor and stays quiet again
     # after returning to the smaller exit threshold (Schmitt hysteresis).
     #
-    # The enter threshold is deliberately wide (0.26 m): a small static offset
-    # (robot running straight but ~0.25 m off the lane centre) is NOT a drift,
-    # and penalizing it with the speed ramp cut the sprint from ~4.4 m/s to
-    # ~2.2 m/s for the whole race. Only genuine departures past 0.26 m should
-    # cost speed.
+    # A large departure enters correction immediately. Smaller, steady centre
+    # offsets use the persistence gate below so gait sway is ignored but the
+    # robot still converges to the camera optical centre instead of preserving
+    # its starting offset for the whole lane.
     correction_enter_lateral_error: float = 0.26
-    correction_exit_lateral_error: float = 0.15
+    correction_exit_lateral_error: float = 0.035
+    center_alignment_enter_lateral_error: float = 0.075
+    center_alignment_confirm_s: float = 0.60
     # A real slow drift should not have to reach the wide static-offset gate.
     # Enter early only when an offset is already meaningful and keeps moving
     # outward in one direction for several frames. Gait sway reverses too often
@@ -105,6 +106,8 @@ class LaneFollowerController:
         self._correction_direction = 0.0
         self._outward_drift_direction = 0.0
         self._outward_drift_duration_s = 0.0
+        self._center_offset_direction = 0.0
+        self._center_offset_duration_s = 0.0
         self._visual_heading_reference_rad = 0.0
         self._last_time: float | None = None
         self._last_valid_time: float | None = None
@@ -120,6 +123,8 @@ class LaneFollowerController:
         self._correction_direction = 0.0
         self._outward_drift_direction = 0.0
         self._outward_drift_duration_s = 0.0
+        self._center_offset_direction = 0.0
+        self._center_offset_duration_s = 0.0
         self._visual_heading_reference_rad = 0.0
         self._last_time = None
         self._last_valid_time = None
@@ -381,6 +386,11 @@ class LaneFollowerController:
                     np.sign(self._filtered_lateral)
                 )
                 self._clear_outward_drift_confirmation()
+                self._clear_center_offset_confirmation()
+                return
+
+            if self._confirm_persistent_center_offset(magnitude, dt):
+                self._clear_outward_drift_confirmation()
                 return
 
             direction = float(np.sign(self._filtered_lateral))
@@ -415,10 +425,53 @@ class LaneFollowerController:
         if magnitude <= self.config.correction_exit_lateral_error:
             self._correction_direction = 0.0
             self._clear_outward_drift_confirmation()
+            self._clear_center_offset_confirmation()
+
+    def _confirm_persistent_center_offset(
+        self,
+        magnitude: float,
+        dt: float,
+    ) -> bool:
+        """Enter correction for a stable off-centre camera observation.
+
+        Alternating torso sway changes sign and cannot accumulate confirmation,
+        while a real lane-centre offset keeps one sign long enough to trigger.
+        """
+
+        direction = float(np.sign(self._filtered_lateral))
+        persistent = (
+            direction != 0.0
+            and magnitude
+            >= self.config.center_alignment_enter_lateral_error
+        )
+        if persistent:
+            if direction != self._center_offset_direction:
+                self._center_offset_direction = direction
+                self._center_offset_duration_s = 0.0
+            self._center_offset_duration_s += dt
+            if (
+                self._center_offset_duration_s
+                >= self.config.center_alignment_confirm_s
+            ):
+                self._correction_direction = direction
+                self._clear_center_offset_confirmation()
+                return True
+        else:
+            self._center_offset_duration_s = max(
+                0.0,
+                self._center_offset_duration_s - 2.0 * dt,
+            )
+            if self._center_offset_duration_s == 0.0:
+                self._center_offset_direction = 0.0
+        return False
 
     def _clear_outward_drift_confirmation(self) -> None:
         self._outward_drift_direction = 0.0
         self._outward_drift_duration_s = 0.0
+
+    def _clear_center_offset_confirmation(self) -> None:
+        self._center_offset_direction = 0.0
+        self._center_offset_duration_s = 0.0
 
     def _update_filtered_heading(
         self,
