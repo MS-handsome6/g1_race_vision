@@ -23,7 +23,8 @@ The RealSense entry point subscribes to `/camera/camera/color/camera_info` and u
 - Locks the selected lane using width, center, and temporal-continuity constraints to reject adjacent lanes.
 - Fuses visual lateral error with G1 IMU heading feedback for high-speed steering.
 - Adds an isolated **Skill 6** to `rl_sar`: one-key stand-up, lane lock, sprint, timed 100 m crossing, visually guided deceleration, and automatic return to Passive.
-- Includes watchdog behavior, fall detection, repeatable scene generation, launch scripts, and 90 unit tests.
+- Includes watchdog behavior, fall detection, repeatable scene generation, launch scripts, and unit tests.
+- On the `feat/obstacle-lane-bypass` branch, the 100 m mission checks both side depth corridors and passes only into a clear adjacent lane. It relocks the lane occupied after the pass; if both sides are occupied, it yields with a normal zero-velocity command rather than asserting `hard_stop`. This exception is not enabled for Num7.
 
 ## Simulation Result
 
@@ -91,7 +92,7 @@ conda activate g1race
 python -m unittest discover -s tests -v
 ```
 
-The 90 tests cover lane-pair validation, adjacent-lane rejection, edge-clipped physical lines, D435i intrinsics and ground projection, three physical-track frames, steering direction, acceleration limits, depth safety, perception dropout, post-finish visual braking, UDP watchdog behavior, and race-scene geometry.
+The tests cover lane-pair validation, adjacent-lane rejection, edge-clipped physical lines, D435i intrinsics and ground projection, three physical-track frames, steering direction, acceleration limits, depth safety and obstacle-bypass clearance, perception dropout, post-finish visual braking, UDP watchdog behavior, and race-scene geometry.
 
 ## Sim-to-Real Status
 

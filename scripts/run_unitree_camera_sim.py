@@ -480,7 +480,9 @@ def main() -> None:
             error_filter_alpha=args.error_filter_alpha,
         )
     )
-    depth_safety = DepthSafetyGate(DepthSafetyConfig())
+    depth_safety = DepthSafetyGate(
+        DepthSafetyConfig(allow_lane_bypass=True)
+    )
     num7_controller = LaneFollowerController(
         LaneFollowerConfig(
             cruise_speed_mps=0.50,
@@ -728,6 +730,7 @@ def main() -> None:
         num7_post_stop_pending: list[dict[str, float]] = []
         last_sim_time: float | None = None
         last_pelvis_x: float | None = None
+        lane_bypass_was_active = False
 
         def _reset_sprint_mission(
             *,
@@ -741,8 +744,11 @@ def main() -> None:
             nonlocal vision_enabled, skill6_ready_at
             nonlocal saved_lock_debug, saved_first_loss_debug
             nonlocal camera_reference_xmat
+            nonlocal lane_bypass_was_active
 
             vision_enabled = False
+            lane_bypass_was_active = False
+            depth_safety.reset()
             skill6_ready_at = (
                 now + max(0.0, args.skill6_stabilize_seconds)
                 if enabled
@@ -819,7 +825,10 @@ def main() -> None:
             desired = num7_controller.update(result, now=now)
             if args.use_depth:
                 safe = depth_safety.apply(
-                    desired, depth_safety.evaluate(depth_m, 0.0)
+                    desired,
+                    depth_safety.evaluate(
+                        depth_m, 0.0, allow_bypass=False
+                    ),
                 )
             else:
                 safe = desired
@@ -1215,6 +1224,18 @@ def main() -> None:
                             now=now,
                             heading_hold_error_rad=heading_hold_error,
                         )
+                    if args.use_depth:
+                        safety = depth_safety.evaluate(depth_m, 0.0)
+                        command = depth_safety.apply(command, safety)
+                        bypass_active = safety.reason.startswith(
+                            "OBSTACLE_BYPASS_"
+                        )
+                        if lane_bypass_was_active and not bypass_active:
+                            # A legal pass may finish in an adjacent lane. Do
+                            # not steer back across traffic to the start lane.
+                            detector.reset()
+                            controller.reset_lane_guidance()
+                        lane_bypass_was_active = bypass_active
                     if start_x is not None:
                         with lock:
                             current_y = float(data.qpos[1])

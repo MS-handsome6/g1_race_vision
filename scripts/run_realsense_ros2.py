@@ -85,6 +85,11 @@ class RealSenseLaneFollower(Node):
         self.declare_parameter("depth_obstacle_percentile", 10.0)
         self.declare_parameter("depth_stop_distance_m", 0.80)
         self.declare_parameter("depth_slow_distance_m", 1.50)
+        self.declare_parameter("depth_side_clearance_margin_m", 0.35)
+        self.declare_parameter("depth_avoidance_yaw_rps", 0.24)
+        self.declare_parameter("depth_minimum_avoidance_speed_scale", 0.25)
+        self.declare_parameter("depth_side_clear_confirm_frames", 3)
+        self.declare_parameter("depth_avoidance_clear_confirm_frames", 6)
         self.declare_parameter("white_value_min", 175)
         self.declare_parameter("adaptive_value_floor", 55)
         self.declare_parameter("white_saturation_max", 100)
@@ -244,6 +249,32 @@ class RealSenseLaneFollower(Node):
                     self.get_parameter("depth_slow_distance_m").value
                 ),
                 max_depth_age_s=max_depth_age_s,
+                # Competition-specific rule: the 100 m event permits leaving
+                # the starting lane. Num7 keeps the conservative stop gate.
+                allow_lane_bypass=(self.mission == "sprint100m"),
+                side_clearance_margin_m=float(
+                    self.get_parameter(
+                        "depth_side_clearance_margin_m"
+                    ).value
+                ),
+                avoidance_yaw_rps=float(
+                    self.get_parameter("depth_avoidance_yaw_rps").value
+                ),
+                minimum_avoidance_speed_scale=float(
+                    self.get_parameter(
+                        "depth_minimum_avoidance_speed_scale"
+                    ).value
+                ),
+                side_clear_confirm_frames=int(
+                    self.get_parameter(
+                        "depth_side_clear_confirm_frames"
+                    ).value
+                ),
+                avoidance_clear_confirm_frames=int(
+                    self.get_parameter(
+                        "depth_avoidance_clear_confirm_frames"
+                    ).value
+                ),
             )
         )
         self.command_output = CommandOutputGate(
@@ -261,6 +292,7 @@ class RealSenseLaneFollower(Node):
         self.camera_intrinsics: CameraIntrinsics | None = None
         self._last_detector_mode = "PREVIEW"
         self._num7_heading_reference_calibrated = False
+        self._lane_bypass_was_active = False
         self.latest_safety = self.depth_safety.evaluate(None, float("inf"))
         # The UDP listener runs on a background thread, while the detector,
         # controller and distance gate are owned by the ROS image callback.
@@ -474,7 +506,7 @@ class RealSenseLaneFollower(Node):
             self._last_detector_mode = result.mode
             desired_command = self.controller.update(result)
             self.latest_safety = self.depth_safety.evaluate(
-                self.latest_depth_m, depth_age
+                self.latest_depth_m, depth_age, allow_bypass=False
             )
             if self.latest_safety.motion_allowed:
                 safe_command = self.walk_gate.update(
@@ -492,6 +524,20 @@ class RealSenseLaneFollower(Node):
             safe_command = self.depth_safety.apply(
                 desired_command, self.latest_safety
             )
+            bypass_active = self.latest_safety.reason.startswith(
+                "OBSTACLE_BYPASS_"
+            )
+            if self._lane_bypass_was_active and not bypass_active:
+                # The organiser permits lane changes in the 100 m race. Once
+                # the pass is complete, make the lane currently under the
+                # robot the new immutable reference instead of pulling back
+                # across traffic toward the starting lane.
+                self.detector.reset()
+                self.controller.reset_lane_guidance()
+                self.get_logger().warning(
+                    "Obstacle bypass complete; relocking the current lane"
+                )
+            self._lane_bypass_was_active = bypass_active
         self.audit_output.emit(safe_command)
         actual_command = self.command_output.emit(safe_command)
 
@@ -554,6 +600,18 @@ class RealSenseLaneFollower(Node):
                 value=f"{result.valid_fraction:.3f}",
             ),
             KeyValue(key="depth_age_s", value=f"{result.depth_age_s:.3f}"),
+            KeyValue(
+                key="avoidance_yaw_rps",
+                value=f"{result.avoidance_yaw_rps:.3f}",
+            ),
+            KeyValue(
+                key="left_clearance_m",
+                value=f"{result.left_clearance_m:.3f}",
+            ),
+            KeyValue(
+                key="right_clearance_m",
+                value=f"{result.right_clearance_m:.3f}",
+            ),
         ]
         message.status = [status]
         self.safety_publisher.publish(message)

@@ -129,6 +129,19 @@ class LaneFollowerController:
         self._last_time = None
         self._last_valid_time = None
 
+    def reset_lane_guidance(self) -> None:
+        """Forget the old lane after a legal 100 m obstacle pass.
+
+        Forward-speed history is preserved so accepting the newly occupied
+        lane cannot create a second, artificial stop after the bypass.
+        """
+
+        previous_vx = self._previous_vx
+        last_time = self._last_time
+        self.reset()
+        self._previous_vx = previous_vx
+        self._last_time = last_time
+
     def set_visual_heading_reference(self, heading_error_rad: float) -> None:
         """Zero a fixed camera/mounting vanishing-point bias at lane lock."""
 
